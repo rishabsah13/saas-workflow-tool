@@ -1,155 +1,277 @@
-import { sampleWorkflow } from "@/lib/sample-data";
-import { Workflow, WorkflowRun } from "@/lib/types";
+// lib/mock-db.ts
+import {
+  Workflow,
+  WorkflowRun,
+  WorkflowStep,
+  TriggerType,
+  WorkflowStatus,
+  StepType,
+  AIConfig,
+  ActionConfig,
+  ConditionConfig,
+} from "@/lib/types";
 
-const workflowStore = new Map<string, Workflow>();
-const runStore = new Map<string, WorkflowRun[]>();
+// -------- Type-safe input shapes --------
 
-if (!workflowStore.has(sampleWorkflow.id)) {
-  workflowStore.set(sampleWorkflow.id, sampleWorkflow);
-}
+export type CreateWorkflowStepInput = {
+  id?: string;
+  type: StepType;
+  name: string;
+  config: AIConfig | ActionConfig | ConditionConfig;
+};
 
-export async function listWorkflows() {
-  return Array.from(workflowStore.values()).sort(
-    (a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt),
+export type CreateWorkflowInput = {
+  name?: string;
+  triggerType?: TriggerType;
+  status?: WorkflowStatus;
+  samplePayload?: string;
+  steps?: CreateWorkflowStepInput[];
+};
+
+export type CreateWorkflowRunInput = Omit<
+  WorkflowRun,
+  "id" | "createdAt"
+>;
+
+// -------- In-memory mock storage --------
+
+const workflows: Workflow[] = [];
+const workflowRuns: WorkflowRun[] = [];
+
+// -------- Helpers & type guards --------
+
+const TRIGGER_TYPES = ["MANUAL", "WEBHOOK"] as const;
+const STEP_TYPES = ["AI", "CONDITION", "ACTION"] as const;
+
+function isTriggerType(value: unknown): value is TriggerType {
+  return (
+    typeof value === "string" &&
+    (TRIGGER_TYPES as readonly string[]).includes(value)
   );
 }
 
-export async function getWorkflowById(id: string) {
-  return workflowStore.get(id) ?? null;
+function isStepType(value: unknown): value is StepType {
+  return (
+    typeof value === "string" &&
+    (STEP_TYPES as readonly string[]).includes(value)
+  );
 }
 
-export async function saveWorkflow(workflow: Workflow) {
-  const updated: Workflow = {
-    ...workflow,
-    updatedAt: new Date().toISOString(),
-  };
-
-  workflowStore.set(workflow.id, updated);
-  return updated;
-}
-
-type CreateWorkflowInput = {
-  name?: string;
-  triggerType?: string;
-  samplePayload?: string;
-  steps?: Array<{
-    id: string;
-    type: string;
-    name: string;
-    config?: Record<string, string>;
-  }>;
+// Default configs – tweak as needed
+const defaultAIConfig: AIConfig = {
+  inputKey: "ticket_text",
+  prompt: "Summarize the ticket and extract category and priority.",
+  outputKeys: ["summary", "category", "priority"],
 };
 
-export async function createWorkflow(input?: CreateWorkflowInput) {
+const defaultConditionConfig: ConditionConfig = {
+  field: "priority",
+  operator: "equals",
+  value: "high",
+};
+
+const defaultActionConfig: ActionConfig = {
+  provider: "slack",
+  action: "send_message",
+  payloadTemplate: {
+    channel: "#support",
+    text: "High priority ticket detected: {{summary}}",
+  },
+};
+
+// -------- Core helpers (internal) --------
+
+function _buildStep(
+  workflowId: string,
+  step: CreateWorkflowStepInput,
+  index: number,
+): WorkflowStep {
+  const stepId = step.id ?? crypto.randomUUID();
+  const type: StepType = isStepType(step.type) ? step.type : "AI";
+
+  let config: AIConfig | ActionConfig | ConditionConfig = step.config;
+  if (type === "AI") {
+    config = {
+      ...defaultAIConfig,
+      ...(step.config as AIConfig | undefined),
+    };
+  } else if (type === "CONDITION") {
+    config = {
+      ...defaultConditionConfig,
+      ...(step.config as ConditionConfig | undefined),
+    };
+  } else {
+    config = {
+      ...defaultActionConfig,
+      ...(step.config as ActionConfig | undefined),
+    };
+  }
+
+  return {
+    id: stepId,
+    workflowId,
+    type,
+    name: step.name || "Untitled step",
+    position: index + 1,
+    config,
+  };
+}
+
+// -------- Workflow CRUD --------
+
+export function createWorkflow(input: CreateWorkflowInput = {}): Workflow {
   const now = new Date().toISOString();
+  const workflowId = crypto.randomUUID();
+
+  const status: WorkflowStatus = input.status ?? "DRAFT";
+  const triggerType: TriggerType = isTriggerType(input.triggerType)
+    ? input.triggerType
+    : "MANUAL";
+
+  const steps: WorkflowStep[] =
+    input.steps?.map((step, index) => _buildStep(workflowId, step, index)) ??
+    [];
 
   const workflow: Workflow = {
-    id: crypto.randomUUID(),
-    name: input?.name?.trim() || "Untitled workflow",
-    status: "DRAFT",
-    triggerType: input?.triggerType || "MANUAL",
-    samplePayload: input?.samplePayload || "{\n  \n}",
-    steps:
-      input?.steps?.map((step, index) => ({
-        ...step,
-        id: step.id || crypto.randomUUID(),
-        workflowId: "",
-        position: index + 1,
-      })) ?? [],
+    id: workflowId,
+    name: input.name?.trim() || "Untitled workflow",
+    status,
+    triggerType,
     createdAt: now,
     updatedAt: now,
+    samplePayload: input.samplePayload || "{\n  \n}",
+    steps,
   };
 
-  workflow.steps = workflow.steps.map((step) => ({
-    ...step,
-    workflowId: workflow.id,
-  }));
-
-  workflowStore.set(workflow.id, workflow);
+  workflows.push(workflow);
   return workflow;
 }
 
-export async function deleteWorkflow(id: string) {
-  runStore.delete(id);
-  return workflowStore.delete(id);
+export function listWorkflows(): Workflow[] {
+  return workflows;
 }
 
-export async function duplicateWorkflow(id: string) {
-  const existing = workflowStore.get(id);
-  if (!existing) return null;
+export function getWorkflow(id: string): Workflow | undefined {
+  return workflows.find((w) => w.id === id);
+}
 
+// alias to match route import
+export function getWorkflowById(id: string): Workflow | undefined {
+  return getWorkflow(id);
+}
+
+export function updateWorkflow(
+  id: string,
+  patch: CreateWorkflowInput = {},
+): Workflow | undefined {
+  const idx = workflows.findIndex((w) => w.id === id);
+  if (idx === -1) return undefined;
+
+  const existing = workflows[idx];
   const now = new Date().toISOString();
 
-  const duplicated: Workflow = {
-    ...existing,
-    id: crypto.randomUUID(),
-    name: `${existing.name} Copy`,
-    createdAt: now,
-    updatedAt: now,
-    steps: existing.steps.map((step, index) => ({
-      ...step,
-      id: crypto.randomUUID(),
-      workflowId: "",
-      position: index + 1,
-    })),
-  };
+  const status: WorkflowStatus = patch.status ?? existing.status;
+  const triggerType: TriggerType = isTriggerType(patch.triggerType)
+    ? patch.triggerType
+    : existing.triggerType;
 
-  duplicated.steps = duplicated.steps.map((step) => ({
-    ...step,
-    workflowId: duplicated.id,
-  }));
+  let steps: WorkflowStep[] = existing.steps;
 
-  workflowStore.set(duplicated.id, duplicated);
-  return duplicated;
-}
-
-export async function publishWorkflow(id: string) {
-  const workflow = workflowStore.get(id);
-  if (!workflow) return null;
+  if (patch.steps) {
+    steps = patch.steps.map((step, index) =>
+      _buildStep(existing.id, step, index),
+    );
+  }
 
   const updated: Workflow = {
-    ...workflow,
-    status: workflow.status === "PUBLISHED" ? "DRAFT" : "PUBLISHED",
-    updatedAt: new Date().toISOString(),
+    ...existing,
+    name: patch.name?.trim() || existing.name,
+    status,
+    triggerType,
+    samplePayload: patch.samplePayload ?? existing.samplePayload,
+    steps,
+    updatedAt: now,
   };
 
-  workflowStore.set(id, updated);
+  workflows[idx] = updated;
   return updated;
 }
 
-export async function listWorkflowRuns(workflowId: string) {
-  return runStore.get(workflowId) ?? [];
+// matches import { saveWorkflow } from "@/lib/mock-db"
+export function saveWorkflow(
+  id: string,
+  patch: CreateWorkflowInput = {},
+): Workflow | undefined {
+  // simple semantics: update existing workflow by id
+  return updateWorkflow(id, patch);
 }
 
-export async function createWorkflowRun(workflowId: string) {
-  const workflow = workflowStore.get(workflowId);
-  if (!workflow) return null;
+// matches import { deleteWorkflow } from "@/lib/mock-db"
+export function deleteWorkflow(id: string): boolean {
+  const idx = workflows.findIndex((w) => w.id === id);
+  if (idx === -1) return false;
+  workflows.splice(idx, 1);
+  return true;
+}
+
+// matches import { duplicateWorkflow } from "@/lib/mock-db"
+export function duplicateWorkflow(id: string): Workflow | undefined {
+  const existing = getWorkflow(id);
+  if (!existing) return undefined;
+
+  const now = new Date().toISOString();
+  const newId = crypto.randomUUID();
+
+  const duplicatedSteps: WorkflowStep[] = existing.steps.map((step, index) => ({
+    ...step,
+    id: crypto.randomUUID(),
+    workflowId: newId,
+    position: index + 1,
+  }));
+
+  const copy: Workflow = {
+    ...existing,
+    id: newId,
+    name: existing.name + " (Copy)",
+    status: "DRAFT",
+    createdAt: now,
+    updatedAt: now,
+    steps: duplicatedSteps,
+  };
+
+  workflows.push(copy);
+  return copy;
+}
+
+// matches import { publishWorkflow } from "@/lib/mock-db"
+export function publishWorkflow(id: string): Workflow | undefined {
+  const existing = getWorkflow(id);
+  if (!existing) return undefined;
+  return updateWorkflow(id, { status: "PUBLISHED" });
+}
+
+// -------- Workflow runs --------
+
+export function createWorkflowRun(
+  input: CreateWorkflowRunInput,
+): WorkflowRun {
+  const now = new Date().toISOString();
 
   const run: WorkflowRun = {
     id: crypto.randomUUID(),
-    workflowId,
-    workflowName: workflow.name,
-    status: workflow.steps.length > 0 ? "SUCCESS" : "FAILED",
-    input: workflow.samplePayload,
-    steps: workflow.steps,
-    output: {
-      preview: {
-        summary:
-          workflow.steps.length > 0
-            ? "Workflow executed successfully in mock mode."
-            : "Workflow has no steps to execute.",
-      },
-    },
-    createdAt: new Date().toISOString(),
+    createdAt: now,
+    ...input,
   };
 
-  const existing = runStore.get(workflowId) ?? [];
-  runStore.set(workflowId, [run, ...existing]);
-
+  workflowRuns.push(run);
   return run;
 }
 
-export async function getWorkflowRun(workflowId: string, runId: string) {
-  const runs = runStore.get(workflowId) ?? [];
-  return runs.find((run) => run.id === runId) ?? null;
+export function listWorkflowRuns(workflowId?: string): WorkflowRun[] {
+  if (!workflowId) return workflowRuns;
+  return workflowRuns.filter((run) => run.workflowId === workflowId);
+}
+
+export function getWorkflowRun(id: string): WorkflowRun | undefined {
+  return workflowRuns.find((run) => run.id === id);
 }
