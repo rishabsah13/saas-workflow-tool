@@ -415,105 +415,110 @@ export function BuilderCanvas({ initialWorkflow }: BuilderCanvasProps) {
   const [testRunResult, setTestRunResult] = useState<any>(null);
   const [testRunError, setTestRunError] = useState<string | null>(null);
 
-async function handleTestRun() {
-  if (isTestRunning) return;
+  async function handleTestRun() {
+    if (isTestRunning) return;
 
-  try {
-    setIsTestRunning(true);
-    setTestRunStage("Preparing payload");
-
-    let parsed: any = {};
     try {
-      parsed = samplePayload ? JSON.parse(samplePayload) : {};
-    } catch {
-      throw new Error("Sample payload is not valid JSON");
-    }
+      setIsTestRunning(true);
+      setTestRunStage("Preparing payload");
 
-    let aiResult: any = null;
-
-    const aiStep = steps.find((step) => step.type === "AI");
-
-    if (aiStep) {
-      const prompt = aiStep.config?.prompt?.trim();
-
-      if (!prompt) {
-        aiResult = {
-          ok: false,
-          skipped: true,
-          error: "AI step skipped because no prompt was configured.",
-        };
-      } else {
-        setTestRunStage("Generating AI result");
-
-        const aiRes = await fetch("/api/ai/enrich", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            prompt,
-            input: parsed,
-          }),
-        });
-
-        const aiData = await aiRes.json().catch(() => null);
-
-        if (!aiRes.ok) {
-          throw new Error(
-            aiData?.error || aiData?.message || "Failed to run AI enrichment",
-          );
-        }
-
-        aiResult = aiData;
+      let parsed: any = {};
+      try {
+        parsed = samplePayload ? JSON.parse(samplePayload) : {};
+      } catch {
+        throw new Error("Sample payload is not valid JSON");
       }
-    }
 
-    setTestRunStage("Saving run");
+      let aiResult: any = null;
 
-    const runRes = await fetch(`/api/workflows/${workflow.id}/runs`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        workflowName: workflow.name,
-        status: "SUCCESS",
-        input: parsed,
-        steps,
-        output: {
-          ai_result: aiResult,
-          preview: {
-            summary:
-              aiResult?.result?.summary || "Workflow executed successfully.",
-          },
+      const aiStep = steps.find((step) => step.type === "AI");
+
+      if (aiStep) {
+        const prompt =
+          aiStep.config &&
+          "prompt" in aiStep.config &&
+          typeof aiStep.config.prompt === "string"
+            ? aiStep.config.prompt.trim()
+            : "";
+
+        if (!prompt) {
+          aiResult = {
+            ok: false,
+            skipped: true,
+            error: "AI step skipped because no prompt was configured.",
+          };
+        } else {
+          setTestRunStage("Generating AI result");
+
+          const aiRes = await fetch("/api/ai/enrich", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              prompt,
+              input: parsed,
+            }),
+          });
+
+          const aiData = await aiRes.json().catch(() => null);
+
+          if (!aiRes.ok) {
+            throw new Error(
+              aiData?.error || aiData?.message || "Failed to run AI enrichment",
+            );
+          }
+
+          aiResult = aiData;
+        }
+      }
+
+      setTestRunStage("Saving run");
+
+      const runRes = await fetch(`/api/workflows/${workflow.id}/runs`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
         },
-      }),
-    });
+        body: JSON.stringify({
+          workflowName: workflow.name,
+          status: "SUCCESS",
+          input: parsed,
+          steps,
+          output: {
+            ai_result: aiResult,
+            preview: {
+              summary:
+                aiResult?.result?.summary || "Workflow executed successfully.",
+            },
+          },
+        }),
+      });
 
-    const runData = await runRes.json().catch(() => null);
+      const runData = await runRes.json().catch(() => null);
 
-    if (!runRes.ok) {
-      throw new Error(
-        runData?.error || runData?.message || "Failed to save run",
-      );
+      if (!runRes.ok) {
+        throw new Error(
+          runData?.error || runData?.message || "Failed to save run",
+        );
+      }
+
+      if (!runData?.id) {
+        throw new Error("Run saved response is missing id");
+      }
+
+      const targetUrl = `/workflows/${workflow.id}/runs/${runData.id}`;
+      console.log("Navigating to:", targetUrl, runData);
+
+      router.push(targetUrl);
+    } catch (error: any) {
+      console.error("handleTestRun error", error);
+      alert(error?.message || "Failed to run workflow");
+    } finally {
+      setIsTestRunning(false);
+      setTestRunStage(null);
     }
-
-    if (!runData?.id) {
-      throw new Error("Run saved response is missing id");
-    }
-
-    const targetUrl = `/workflows/${workflow.id}/runs/${runData.id}`;
-    console.log("Navigating to:", targetUrl, runData);
-
-    router.push(targetUrl);
-  } catch (error: any) {
-    console.error("handleTestRun error", error);
-    alert(error?.message || "Failed to run workflow");
-  } finally {
-    setIsTestRunning(false);
-    setTestRunStage(null);
   }
-}
 
   console.log("steps", steps);
   console.log(
@@ -896,7 +901,7 @@ async function handleTestRun() {
                       </Label>
                       <Input
                         id="ai-input-key"
-                        value={(draftStep.config as AIConfig).inputKey}
+                       value={(draftStep.config as AIConfig | undefined)?.inputKey ?? ""}
                         onChange={(e) =>
                           updateAIConfig({ inputKey: e.target.value })
                         }
@@ -913,9 +918,7 @@ async function handleTestRun() {
                       </Label>
                       <Input
                         id="ai-output-keys"
-                        value={(draftStep.config as AIConfig).outputKeys.join(
-                          ", ",
-                        )}
+                        value={((draftStep.config as AIConfig | undefined)?.outputKeys ?? []).join(", ")}
                         onChange={(e) =>
                           updateAIConfig({
                             outputKeys: e.target.value
@@ -934,7 +937,7 @@ async function handleTestRun() {
                       </Label>
                       <Textarea
                         id="ai-prompt"
-                        value={(draftStep.config as AIConfig).prompt}
+                        value={((draftStep.config as AIConfig | undefined)?.outputKeys ?? []).join(", ")}
                         onChange={(e) =>
                           updateAIConfig({ prompt: e.target.value })
                         }

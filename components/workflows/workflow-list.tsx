@@ -57,7 +57,7 @@ export function WorkflowList({
         },
         body: JSON.stringify({
           name: template.name,
-          triggerType: template.triggerType,
+          triggerType: "MANUAL",
           samplePayload: template.samplePayload,
           steps: template.steps,
         }),
@@ -217,7 +217,7 @@ export function WorkflowList({
 
               <div className="mt-4 rounded-xl border border-white/10 bg-black/20 px-3 py-2">
                 <p className="text-xs text-slate-500">
-                  {template.steps.length} steps • {template.triggerType}
+                 {template.steps.length} steps • MANUAL
                 </p>
               </div>
 

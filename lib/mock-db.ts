@@ -10,7 +10,7 @@ if (!workflowStore.has(sampleWorkflow.id)) {
 
 export async function listWorkflows() {
   return Array.from(workflowStore.values()).sort(
-    (a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt)
+    (a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt),
   );
 }
 
@@ -28,7 +28,6 @@ export async function saveWorkflow(workflow: Workflow) {
   return updated;
 }
 
-
 type CreateWorkflowInput = {
   name?: string;
   triggerType?: string;
@@ -41,20 +40,30 @@ type CreateWorkflowInput = {
   }>;
 };
 
-
 export async function createWorkflow(input?: CreateWorkflowInput) {
+  const now = new Date().toISOString();
 
-    const workflow = {
+  const workflow: Workflow = {
     id: crypto.randomUUID(),
-    name: input?.name || "Untitled workflow",
+    name: input?.name?.trim() || "Untitled workflow",
     status: "DRAFT",
     triggerType: input?.triggerType || "MANUAL",
-    samplePayload: input?.samplePayload || "{\n\n}",
-    steps: input?.steps || [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
+    samplePayload: input?.samplePayload || "{\n  \n}",
+    steps:
+      input?.steps?.map((step, index) => ({
+        ...step,
+        id: step.id || crypto.randomUUID(),
+        workflowId: "",
+        position: index + 1,
+      })) ?? [],
+    createdAt: now,
+    updatedAt: now,
   };
 
+  workflow.steps = workflow.steps.map((step) => ({
+    ...step,
+    workflowId: workflow.id,
+  }));
 
   workflowStore.set(workflow.id, workflow);
   return workflow;
@@ -119,14 +128,19 @@ export async function createWorkflowRun(workflowId: string) {
   const run: WorkflowRun = {
     id: crypto.randomUUID(),
     workflowId,
-    startedAt: new Date().toISOString(),
+    workflowName: workflow.name,
     status: workflow.steps.length > 0 ? "SUCCESS" : "FAILED",
-    trigger: workflow.triggerType,
-    stepsExecuted: workflow.steps.length,
-    message:
-      workflow.steps.length > 0
-        ? "Workflow executed successfully in mock mode."
-        : "Workflow has no steps to execute.",
+    input: workflow.samplePayload,
+    steps: workflow.steps,
+    output: {
+      preview: {
+        summary:
+          workflow.steps.length > 0
+            ? "Workflow executed successfully in mock mode."
+            : "Workflow has no steps to execute.",
+      },
+    },
+    createdAt: new Date().toISOString(),
   };
 
   const existing = runStore.get(workflowId) ?? [];
@@ -135,15 +149,7 @@ export async function createWorkflowRun(workflowId: string) {
   return run;
 }
 
-
 export async function getWorkflowRun(workflowId: string, runId: string) {
-  const run = runStore.get(runId);
-  if (!run) return null;
-  if (run.workflowId !== workflowId) return null;
-  return run;
+  const runs = runStore.get(workflowId) ?? [];
+  return runs.find((run) => run.id === runId) ?? null;
 }
-
-
-
-
-

@@ -41,3 +41,16 @@ export interface ActionConfig {
 }
 
 export type NewStepType = "AI" | "CONDITION" | "ACTION";
+
+
+
+export interface WorkflowRun {
+  id: string;
+  workflowId: string;
+  workflowName?: string;
+  status: string;
+  input: any;
+  steps: any[];
+  output: any;
+  createdAt: string;
+}
